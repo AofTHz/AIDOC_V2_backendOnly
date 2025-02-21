@@ -55,12 +55,11 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1"],  # Adjust this to allow specific origins
+    allow_origins=["*"],  # ✅ Allows requests from ANY origin
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all HTTP headers
+    allow_methods=["*"],  # ✅ Allows all HTTP methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # ✅ Allows all headers
 )
-
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
