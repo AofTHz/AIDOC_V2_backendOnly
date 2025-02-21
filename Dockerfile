@@ -13,12 +13,14 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the project files
-COPY backend /app
 
-# Copy and install dependencies from requirements.txt
-COPY backend/requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy application code
+COPY . /app
+
+# Copy and install dependencies
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
 
 # Expose FastAPI port (5000, as set in `main.py`)
 EXPOSE 5000
