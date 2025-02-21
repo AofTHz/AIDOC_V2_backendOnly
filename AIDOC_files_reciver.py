@@ -56,16 +56,17 @@ def log_statistics(pdf_filename: str, found_keywords: dict, accuracy):
         ])
 
 def clean_text(text: str) -> str:
-    """Remove all whitespace characters and log the cleaning process."""
+    """Remove all whitespace characters while preserving Thai text structure."""
     original_length = len(text)
-    # Remove all whitespace characters including spaces, tabs, newlines
+
+    # 🔹 Remove **all** whitespace (spaces, tabs, newlines) to match your Thai approach
     cleaned = re.sub(r'\s+', '', text)
+
     final_length = len(cleaned)
     logger.debug(f"Text cleaning: Original length: {original_length}, Final length: {final_length}")
     logger.debug(f"Characters removed: {original_length - final_length}")
+
     return cleaned
-
-
 def pdf2image_converter(files, task_id, page_range=None):
     pathlib.Path(f"database/temp").mkdir(parents=True, exist_ok=True)
     if platform.system() == "Windows":
@@ -80,10 +81,11 @@ def pdf2image_converter(files, task_id, page_range=None):
     logger.debug(f"Converted PDF to {len(images)} images for pages {page_range}")
     return images
 
-def extract_text_from_pdf_pages(pdf_file, task_id, page_range):
+def extract_text_from_pdf_pages(pdf_file, task_id):
     """
     OCR แบบแยกหน้าคืนมาเป็น list โดยแต่ละ element คือข้อความของหน้านั้น
     """
+    page_range = [1,7]
     try:
         logger.debug(f"Processing PDF for OCR (task: {task_id}, pages {page_range})")
         images = pdf2image_converter(pdf_file, task_id, page_range=page_range)
@@ -101,26 +103,6 @@ def extract_text_from_pdf_pages(pdf_file, task_id, page_range):
         logger.error(traceback.format_exc())
         return []
 
-def extract_text_from_pdf(pdf_file, task_id, page_range):
-    try:
-        logger.debug(f"Processing PDF for OCR (task: {task_id}, pages {page_range})")
-        images = pdf2image_converter(pdf_file, task_id, page_range=page_range)
-        full_text = ""
-
-        for i, image in enumerate(images):
-            logger.debug(f"Processing image {i} of {len(images)}")
-            text = ocr_image(image.filename)
-            full_text += text
-
-        cleaned_text = clean_text(full_text)
-        logger.debug(f"Extracted text length: {len(cleaned_text)} characters")
-        return cleaned_text
-    except Exception as e:
-        logger.error(f"Error extracting text from PDF: {e}")
-        logger.error(traceback.format_exc())
-        return None
-
-
 def search_keywords_in_pdfs(pdf_texts: dict, keywords: list[str]):
     matched_pdfs = {}
     for filename, text in pdf_texts.items():
@@ -131,19 +113,15 @@ def search_keywords_in_pdfs(pdf_texts: dict, keywords: list[str]):
     return matched_pdfs
 
 
-def process_pdfs_with_keyword(pdf_files: dict, task_id, keywords: list[str], page_range=(1, 10)):
-    """
-    OCR ทุกหน้าเสมอ แต่เลือกส่งเฉพาะหน้าที่มีคีย์เวิร์ดให้ Gemini
-    ถ้าไม่พบคีย์เวิร์ดเลย -> ส่งทุกหน้าไปให้ Gemini
-    """
+def process_pdfs_with_keyword(pdf_files: dict, task_id, keywords: list[str]):
     extracted_texts = {}
     keyword_statistics = {}
     found_pages_for_keyword = {}
+
     for filename, pdf_content in pdf_files.items():
         logger.debug(f"Extracting text (split by pages) from {filename}")
-        page_texts = extract_text_from_pdf_pages(pdf_content, task_id, page_range)
+        page_texts = extract_text_from_pdf_pages(pdf_content, task_id)
 
-        # เก็บว่าคีย์เวิร์ดไหนเจอที่หน้าไหนบ้าง
         for page_index, text in enumerate(page_texts, start=1):
             for kw in keywords:
                 if kw.lower() in text.lower():
@@ -151,27 +129,24 @@ def process_pdfs_with_keyword(pdf_files: dict, task_id, keywords: list[str], pag
                         found_pages_for_keyword[kw] = []
                     found_pages_for_keyword[kw].append(page_index)
 
-        # 📊 บันทึกสถิติว่าคีย์เวิร์ดเจอหน้าไหนบ้าง
         keyword_statistics[filename] = found_pages_for_keyword
-        #log_statistics(filename, found_pages_for_keyword)
 
-        # ✂️ เลือกเฉพาะหน้าที่เจอคีย์เวิร์ดไปใช้ (ถ้าไม่มีเลยให้ใช้ทุกหน้า)
         selected_pages = sorted(set([p for pages in found_pages_for_keyword.values() for p in pages]))
 
         if selected_pages:
             text_for_gemini = "\n".join(page_texts[p - 1] for p in selected_pages)
             logger.debug(f"Selecting pages {selected_pages} for Gemini")
         else:
-            text_for_gemini = "\n".join(page_texts)  # ถ้าไม่เจอคีย์เวิร์ด ส่งทุกหน้า
+            text_for_gemini = "\n".join(page_texts)
             logger.debug("No keywords found, sending full document to Gemini")
 
         extracted_texts[filename] = text_for_gemini
 
-    # ✅ คืนค่าข้อความของไฟล์แรกที่ OCR เสร็จ
     for filename, text in extracted_texts.items():
         return text, [filename, found_pages_for_keyword]
 
-    return None  # กรณีผิดปกติ (ไม่มีไฟล์ OCR เลย)
+    return None
+
 
 def ocr_image(images_name):
     path = f"{images_name}"
@@ -184,125 +159,130 @@ def ocr_image(images_name):
     logger.debug(f"OCR text preview: {cleaned_result[:200]}...")
     return cleaned_result
 
-
-def return_result(pdf_file, task_id, folder_list: list, filename:str):
+def core_result_processing(pdf_file, task_id, folder_list: list, filename: str):
+    """Handles text extraction, AI classification, and returns all required data."""
     keywords = ["บทคัดย่อ", "abstract", "overview", *text_fix]
     page_range = (1, 7)
 
+    logger.debug(f"Extracting text from PDF (task: {task_id}, filename: {filename})")
+
+    if not pdf_file or len(pdf_file) == 0:
+        raise Exception("PDF file is empty")
+
+    pdf_files = {filename: pdf_file}
+    matched_text, found_keywords = process_pdfs_with_keyword(pdf_files, task_id, keywords)
+
+    if not matched_text:
+        logger.debug("Keyword not found. Using fallback OCR processing.")
+        images = pdf2image_converter(pdf_file, task_id, page_range=page_range)
+
+        full_text = ""
+        for i, image in enumerate(images):
+            logger.debug(f"Fallback OCR on image {i + 1}/{len(images)}")
+            text = ocr_image(image.filename)
+            full_text += text + "\n"
+    else:
+        full_text = matched_text
+
+    if not full_text.strip():
+        raise Exception("OCR returned empty text. AI processing skipped.")
+
+    logger.debug("=== Text being sent to Gemini AI ===")
+    logger.debug(f"Text length: {len(full_text)} characters")
+    logger.debug(f"First 500 characters:\n{full_text[:500]}")
+    logger.debug(f"FolderList: {folder_list}")
+    logger.debug("===============================")
+
+    max_retries = 5
+    retry_count = 0
+
+    while retry_count < max_retries:
+        result = generate_response(full_text, folder_list)
+        logger.debug(f"MR.Result is here: {result}")
+        split_result = result.split(",", 1)
+
+        if len(split_result) == 2:
+            gemini_label = split_result[0].strip()
+            try:
+                accuracy = ast.literal_eval(split_result[1].strip())
+                return gemini_label, accuracy, full_text, found_keywords  # ✅ Return all useful data
+            except (SyntaxError, ValueError):
+                pass  # Retry if parsing fails
+
+        retry_count += 1
+        time.sleep(1)
+
+    raise ValueError("AI response format is incorrect after multiple retries")
+
+def return_result(pdf_file, task_id, folder_list: list, filename: str):
+    """Keeps original return format (label, accuracy as string)."""
     try:
-        logger.debug(f"Starting PDF processing with keyword '{keywords}' in pages {page_range}")
-        logger.debug(f"PDF file size: {len(pdf_file)} bytes")
+        gemini_label, accuracy, _, found_keywords = core_result_processing(pdf_file, task_id, folder_list, filename)
 
-        if not pdf_file or len(pdf_file) == 0:
-            raise Exception("PDF file is empty")
+        # ✅ Log statistics using extracted keywords
+        log_statistics(filename, found_keywords, accuracy)
 
-        pdf_files = {filename: pdf_file}
-        matched_text, file_info = process_pdfs_with_keyword(pdf_files, task_id, keywords, page_range)
-
-        if not matched_text:
-            logger.debug("Keyword not found. Using default page processing.")
-            images = pdf2image_converter(pdf_file, task_id, page_range=page_range)
-
-            # Instead of only using images[0], loop through all pages
-            full_text = ""
-            for i, image in enumerate(images):
-                logger.debug(f"Fallback OCR on image {i + 1}/{len(images)}")
-                text = ocr_image(image.filename)
-                full_text += text
-        else:
-            full_text = matched_text
-
-        logger.debug("=== Text being sent to Gemini ===")
-        logger.debug(f"Text length: {len(full_text)} characters")
-        logger.debug("First 500 characters:")
-        logger.debug(full_text[:500])
-        logger.debug("Last 500 characters:")
-        logger.debug(full_text[-500:])
-        logger.debug("===============================")
-        max_retries = 5  # Prevent infinite loops by limiting retries
-        retry_count = 0
-
-        while retry_count < max_retries:
-            result = generate_response(full_text, folder_list)
-            split_result = result.split(",", 1)
-
-            if len(split_result) == 2:  # Ensure it contains exactly two parts
-                gemini_result = split_result[0].strip()
-                try:
-                    accuracy = ast.literal_eval(split_result[1].strip())
-                    break  # Successfully parsed, exit loop
-                except (SyntaxError, ValueError):
-                    pass  # Parsing failed, retry
-
-            retry_count += 1
-            time.sleep(1)  # Wait a bit before retrying
-
-        if retry_count == max_retries:
-            raise ValueError("AI response format is incorrect after multiple retries")
-
-        log_statistics(file_info[0],file_info[1],accuracy)
-
-        logger.debug("=== Gemini Response ===")
-        logger.debug(f"Response length: {len(gemini_result)} characters")
-        logger.debug("First 200 characters of response:")
-        logger.debug(gemini_result[:200])
-        logger.debug("======================")
-
-        return gemini_result.rstrip(), str(accuracy)
+        return gemini_label, str(accuracy)
     except Exception as e:
         logger.error(f"Error processing PDF file: {e}")
         logger.error(traceback.format_exc())
-        raise Exception("Failed to read PDF file")
+        raise Exception("Failed to process PDF file")
+
+def return_result_with_text(pdf_file, task_id, folder_list: list, filename: str):
+    """Returns (label, [accuracy], full_text) for AI tuning."""
+    try:
+        gemini_label, accuracy, full_text, found_keywords = core_result_processing(pdf_file, task_id, folder_list, filename)
+
+        # ✅ Log statistics using extracted keywords
+        log_statistics(filename, found_keywords, accuracy)
+
+        return gemini_label, accuracy, full_text  # ✅ Returns full text for AI tuning
+    except Exception as e:
+        logger.error(f"Error processing PDF file: {e}")
+        logger.error(traceback.format_exc())
+        raise Exception("Failed to process PDF file")
+
 
 def launch_scan(pdf_content: bytes, filename: str, task_id: str, folder_list: list, session: Session):
-    """
-    Process the uploaded PDF file and update its status throughout the process.
-    """
-    # Initialize status with more detailed information
     upload_status[task_id] = {
         "status": "Processing",
         "file_name": filename,
         "current_step": "Starting scan",
         "progress": 0
     }
-
     try:
         logger.debug("Starting scan process")
-        # Update status for text extraction
         upload_status[task_id].update({
             "current_step": "Extracting text",
             "progress": 25
         })
 
-        text_result, accuracy = return_result(pdf_content, task_id, folder_list, filename)
-        logger.debug(f"Scan completed. Result: {text_result}")
+        folder_names = [folder.name for folder in folder_list]
 
-        # Update status for file organization
+        text_result, accuracy = return_result(pdf_content, task_id, folder_names, filename)
+        logger.debug(f"Scan completed. Result: {text_result}")
         upload_status[task_id].update({
             "current_step": "Organizing files",
             "progress": 75
         })
 
-        organizing_files(text_result, filename, task_id, accuracy ,session)
+        organizing_files(text_result, filename, task_id, accuracy, session)
 
-        # Mark this upload as completed with final status
         upload_status[task_id].update({
             "status": "Completed",
             "current_step": "Process complete",
             "progress": 100
         })
         logger.debug(f"Task {task_id} completed successfully")
-
     except Exception as e:
         logger.error(f"Error in launch_scan: {e}")
-        # If an exception occurred, mark it as failed with error details
+
         upload_status[task_id].update({
             "status": "Failed",
             "error": str(e),
             "current_step": "Error occurred"
         })
     finally:
-        # Cleanup temp files
         try:
             shutil.rmtree(f"database/temp/{task_id}", ignore_errors=True)
         except Exception as cleanup_error:

@@ -32,33 +32,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    create_db_and_tables()
+@asynccontextmanager #แก้ไขฟังชั่นให้ง่ายต่อการจัดการ resource
+async def lifespan(app: FastAPI): #เป็นฟังชั่นที่จะทำงานเมื่อเริ่มต้นทำงาน
+    create_db_and_tables()        #เรียกใช้งาน ฟังชัน สร้างฐานข้อมูล
 
-    session_gen = get_session()  # This returns the generator
-    session = next(session_gen)  # Retrieve the session
+    session_gen = get_session()
+    session = next(session_gen)  #สร้าง Session สำหรับคำสั่งถัดไป
 
     try:
-        folders = session.exec(select(Folder)).all()
-        if not folders:
-            first_folder_set(session)
+        folders = session.exec(select(Folder)).all() #หาโฟลเดอร์ทั้งหมด
+        if not folders:                              #หากไม่มีโฟลเดอร์ให้ทำขั้นตอนต่อไป
+            first_folder_set(session)                #สร้างโฟลเดอร์ชุดแรก
     finally:
         try:
             next(session_gen)
         except StopIteration:
             pass
-    yield
+    yield                      #หยุดการทำงานฟังชั่นนี้
 
 
 app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1"],  # Adjust this to allow specific origins
+    allow_origins=["http://127.0.0.1"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all HTTP headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 if __name__ == "__main__":
@@ -183,3 +183,31 @@ async def upload_stream(task_id: str):
         }
     )
 
+@app.delete("/deleteFile")
+def delete_file(file_id: str, session: Session = Depends(get_session)):
+
+    # Query the file using its unique id
+    statement = select(File).where(File.id == file_id)
+    file_obj = session.exec(statement).first()
+    if not file_obj:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    statement_folder = select(Folder).where(Folder.id == file_obj.folder_id)
+    folder_obj = session.exec(statement_folder).first()
+    if not folder_obj:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    file_path = os.path.join("database/storage", folder_obj.name, file_obj.name)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    try:
+        os.remove(file_path)
+    except Exception as e:
+        logger.error(f"Error deleting file: {e}")
+        raise HTTPException(status_code=500, detail="Error deleting file")
+
+    session.delete(file_obj)
+    session.commit()
+
+    return {"success": True, "message": "File deleted successfully"}

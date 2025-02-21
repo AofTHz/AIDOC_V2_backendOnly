@@ -46,14 +46,12 @@ def first_folder_set(session: Session):
     create_folder("HardwareIOT", session)
     create_folder("WebApp", session)
 
-
 def get_folder(session: Session):
-    statement = select(Folder.name)
+    statement = select(Folder.name).order_by(Folder.id)  # Order by ID
     result = session.exec(statement)
     folder_list = list(result)  # Convert once
     logger.debug("LIST OF FOLDER: %s", folder_list)
     return folder_list
-
 
 def update_file_data(folder_name: str, file_name: str, accuracy:int, session: Session):
     statement = select(Folder).where(Folder.name == folder_name)
